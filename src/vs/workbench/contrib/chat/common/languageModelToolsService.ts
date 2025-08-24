@@ -22,7 +22,8 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { derived, IObservable, IReader, ITransaction, ObservableSet } from '../../../../base/common/observable.js';
 import { Iterable } from '../../../../base/common/iterator.js';
 import { localize } from '../../../../nls.js';
-import { ToolResultAudience } from './languageModels.js';
+import { LanguageModelPartAudience } from './languageModels.js';
+import { Separator } from '../../../../base/common/actions.js';
 
 export interface IToolData {
 	id: string;
@@ -192,7 +193,7 @@ export function stringifyPromptTsxPart(part: IToolResultPromptTsxPart): string {
 export interface IToolResultTextPart {
 	kind: 'text';
 	value: string;
-	audience?: ToolResultAudience[];
+	audience?: LanguageModelPartAudience[];
 }
 
 export interface IToolResultDataPart {
@@ -201,7 +202,7 @@ export interface IToolResultDataPart {
 		mimeType: string;
 		data: VSBuffer;
 	};
-	audience?: ToolResultAudience[];
+	audience?: LanguageModelPartAudience[];
 }
 
 export interface IToolConfirmationMessages {
@@ -209,7 +210,17 @@ export interface IToolConfirmationMessages {
 	message: string | IMarkdownString;
 	disclaimer?: string | IMarkdownString;
 	allowAutoConfirm?: boolean;
+	terminalCustomActions?: ToolConfirmationAction[];
 }
+
+export interface IToolConfirmationAction {
+	label: string;
+	disabled?: boolean;
+	tooltip?: string;
+	data: any;
+}
+
+export type ToolConfirmationAction = IToolConfirmationAction | Separator;
 
 export interface IPreparedToolInvocation {
 	invocationMessage?: string | IMarkdownString;
@@ -292,7 +303,8 @@ export interface ILanguageModelToolsService {
 	getTool(id: string): IToolData | undefined;
 	getToolByName(name: string, includeDisabled?: boolean): IToolData | undefined;
 	invokeTool(invocation: IToolInvocation, countTokens: CountTokensCallback, token: CancellationToken): Promise<IToolResult>;
-	setToolAutoConfirmation(toolId: string, scope: 'workspace' | 'profile' | 'memory', autoConfirm?: boolean): void;
+	setToolAutoConfirmation(toolId: string, scope: 'workspace' | 'profile' | 'session' | 'never'): void;
+	getToolAutoConfirmation(toolId: string): 'workspace' | 'profile' | 'session' | 'never';
 	resetToolAutoConfirmation(): void;
 	cancelToolCallsForRequest(requestId: string): void;
 	toToolEnablementMap(toolOrToolSetNames: Set<string>): Record<string, boolean>;

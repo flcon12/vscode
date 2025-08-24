@@ -27,15 +27,16 @@ export const enum ChatMessageRole {
 	Assistant,
 }
 
-export enum ToolResultAudience {
+export enum LanguageModelPartAudience {
 	Assistant = 0,
 	User = 1,
+	Extension = 2,
 }
 
 export interface IChatMessageTextPart {
 	type: 'text';
 	value: string;
-	audience?: ToolResultAudience[];
+	audience?: LanguageModelPartAudience[];
 }
 
 export interface IChatMessageImagePart {
@@ -43,11 +44,18 @@ export interface IChatMessageImagePart {
 	value: IChatImageURLPart;
 }
 
+export interface IChatMessageThinkingPart {
+	type: 'thinking';
+	value: string;
+	id?: string;
+	metadata?: string;
+}
+
 export interface IChatMessageDataPart {
 	type: 'data';
 	mimeType: string;
 	data: VSBuffer;
-	audience?: ToolResultAudience[];
+	audience?: LanguageModelPartAudience[];
 }
 
 export interface IChatImageURLPart {
@@ -89,7 +97,7 @@ export interface IChatMessageToolResultPart {
 	isError?: boolean;
 }
 
-export type IChatMessagePart = IChatMessageTextPart | IChatMessageToolResultPart | IChatResponseToolUsePart | IChatMessageImagePart | IChatMessageDataPart;
+export type IChatMessagePart = IChatMessageTextPart | IChatMessageToolResultPart | IChatResponseToolUsePart | IChatMessageImagePart | IChatMessageDataPart | IChatMessageThinkingPart;
 
 export interface IChatMessage {
 	readonly name?: string | undefined;
@@ -100,7 +108,7 @@ export interface IChatMessage {
 export interface IChatResponseTextPart {
 	type: 'text';
 	value: string;
-	audience?: ToolResultAudience[];
+	audience?: LanguageModelPartAudience[];
 }
 
 export interface IChatResponsePromptTsxPart {
@@ -110,8 +118,9 @@ export interface IChatResponsePromptTsxPart {
 
 export interface IChatResponseDataPart {
 	type: 'data';
-	value: IChatImageURLPart;
-	audience?: ToolResultAudience[];
+	mimeType: string;
+	data: VSBuffer;
+	audience?: LanguageModelPartAudience[];
 }
 
 export interface IChatResponseToolUsePart {
@@ -119,6 +128,13 @@ export interface IChatResponseToolUsePart {
 	name: string;
 	toolCallId: string;
 	parameters: any;
+}
+
+export interface IChatResponseThinkingPart {
+	type: 'thinking';
+	value: string;
+	id?: string;
+	metadata?: string;
 }
 
 export interface IChatResponsePullRequestPart {
@@ -130,14 +146,9 @@ export interface IChatResponsePullRequestPart {
 	linkTag: string;
 }
 
+export type IChatResponsePart = IChatResponseTextPart | IChatResponseToolUsePart | IChatResponseDataPart | IChatResponseThinkingPart;
+
 export type IExtendedChatResponsePart = IChatResponsePullRequestPart;
-
-export type IChatResponsePart = IChatResponseTextPart | IChatResponseToolUsePart | IChatResponseDataPart;
-
-export interface IChatResponseFragment {
-	index: number;
-	part: IChatResponsePart;
-}
 
 export interface ILanguageModelChatMetadata {
 	readonly extension: ExtensionIdentifier;
@@ -146,8 +157,8 @@ export interface ILanguageModelChatMetadata {
 	readonly id: string;
 	readonly vendor: string;
 	readonly version: string;
-	readonly description?: string;
-	readonly cost?: string;
+	readonly tooltip?: string;
+	readonly detail?: string;
 	readonly family: string;
 	readonly maxInputTokens: number;
 	readonly maxOutputTokens: number;
@@ -182,7 +193,7 @@ export namespace ILanguageModelChatMetadata {
 }
 
 export interface ILanguageModelChatResponse {
-	stream: AsyncIterable<IChatResponseFragment | IChatResponseFragment[]>;
+	stream: AsyncIterable<IChatResponsePart | IChatResponsePart[]>;
 	result: Promise<any>;
 }
 
@@ -362,13 +373,16 @@ export class LanguageModelsService implements ILanguageModelsService {
 			this._logService.warn(`[LM] Cannot update model picker preference for unknown model ${modelIdentifier}`);
 			return;
 		}
-		delete this._modelPickerUserPreferences[modelIdentifier];
-		if (model.isUserSelectable !== showInModelPicker) {
-			this._modelPickerUserPreferences[modelIdentifier] = showInModelPicker;
+
+		this._modelPickerUserPreferences[modelIdentifier] = showInModelPicker;
+		if (showInModelPicker === model.isUserSelectable) {
+			delete this._modelPickerUserPreferences[modelIdentifier];
 			this._storageService.store('chatModelPickerPreferences', this._modelPickerUserPreferences, StorageScope.PROFILE, StorageTarget.USER);
-			this._onLanguageModelChange.fire();
-			this._logService.trace(`[LM] Updated model picker preference for ${modelIdentifier} to ${showInModelPicker}`);
+		} else if (model.isUserSelectable !== showInModelPicker) {
+			this._storageService.store('chatModelPickerPreferences', this._modelPickerUserPreferences, StorageScope.PROFILE, StorageTarget.USER);
 		}
+		this._onLanguageModelChange.fire();
+		this._logService.trace(`[LM] Updated model picker preference for ${modelIdentifier} to ${showInModelPicker}`);
 	}
 
 	getVendors(): IUserFriendlyLanguageModel[] {
@@ -404,6 +418,9 @@ export class LanguageModelsService implements ILanguageModelsService {
 		if (typeof vendors === 'string') {
 			vendors = [vendors];
 		}
+		// Activate extensions before requesting to resolve the models
+		const all = vendors.map(vendor => this._extensionService.activateByEvent(`onLanguageModelChat:${vendor}`));
+		await Promise.all(all);
 		this._clearModelCache(vendors);
 		for (const vendor of vendors) {
 			const provider = this._providers.get(vendor);
@@ -412,7 +429,11 @@ export class LanguageModelsService implements ILanguageModelsService {
 				continue;
 			}
 			try {
-				const modelsAndIdentifiers = await provider.prepareLanguageModelChat({ silent }, CancellationToken.None);
+				let modelsAndIdentifiers = await provider.prepareLanguageModelChat({ silent }, CancellationToken.None);
+				// This is a bit of a hack, when prompting user if the provider returns any models that are user selectable then we only want to show those and not the entire model list
+				if (!silent && modelsAndIdentifiers.some(m => m.metadata.isUserSelectable)) {
+					modelsAndIdentifiers = modelsAndIdentifiers.filter(m => m.metadata.isUserSelectable || this._modelPickerUserPreferences[m.identifier] === true);
+				}
 				for (const modelAndIdentifier of modelsAndIdentifiers) {
 					if (this._modelCache.has(modelAndIdentifier.identifier)) {
 						this._logService.warn(`[LM] Model ${modelAndIdentifier.identifier} is already registered. Skipping.`);
@@ -431,14 +452,9 @@ export class LanguageModelsService implements ILanguageModelsService {
 	async selectLanguageModels(selector: ILanguageModelChatSelector, allowPromptingUser?: boolean): Promise<string[]> {
 
 		if (selector.vendor) {
-			// selective activation
-			await this._extensionService.activateByEvent(`onLanguageModelChat:${selector.vendor}}`);
 			await this.resolveLanguageModels([selector.vendor], !allowPromptingUser);
 		} else {
-			// activate all extensions that do language models
 			const allVendors = Array.from(this._vendors.keys());
-			const all = allVendors.map(vendor => this._extensionService.activateByEvent(`onLanguageModelChat:${vendor}`));
-			await Promise.all(all);
 			await this.resolveLanguageModels(allVendors, !allowPromptingUser);
 		}
 
@@ -470,7 +486,7 @@ export class LanguageModelsService implements ILanguageModelsService {
 
 		this._providers.set(vendor, provider);
 
-		// TODO @lramos15 - Smarter restore logic. Don't activate all providers, but only those which were known to need restoring
+		// TODO @lramos15 - Smarter restore logic. Don't resolve models for all providers, but only those which were known to need restoring
 		this.resolveLanguageModels(vendor, true).then(() => {
 			this._onLanguageModelChange.fire();
 		});

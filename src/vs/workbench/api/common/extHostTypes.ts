@@ -1872,6 +1872,11 @@ export enum InlineCompletionEndOfLifeReasonKind {
 	Ignored = 2,
 }
 
+export enum InlineCompletionDisplayLocationKind {
+	Code = 1,
+	Label = 2
+}
+
 export enum ViewColumn {
 	Active = -1,
 	Beside = -2,
@@ -4648,6 +4653,17 @@ export class ChatResponseProgressPart2 {
 	}
 }
 
+export class ChatResponseThinkingProgressPart {
+	value: string;
+	id?: string;
+	metadata?: string;
+	constructor(value: string, id?: string, metadata?: string) {
+		this.value = value;
+		this.id = id;
+		this.metadata = metadata;
+	}
+}
+
 export class ChatResponseWarningPart {
 	value: vscode.MarkdownString;
 	constructor(value: string | vscode.MarkdownString) {
@@ -4669,7 +4685,7 @@ export class ChatResponseCommandButtonPart {
 export class ChatResponseReferencePart {
 	value: vscode.Uri | vscode.Location | { variableName: string; value?: vscode.Uri | vscode.Location } | string;
 	iconPath?: vscode.Uri | vscode.ThemeIcon | { light: vscode.Uri; dark: vscode.Uri };
-	options?: { status?: { description: string; kind: vscode.ChatResponseReferencePartStatusKind } };
+	options?: { status?: { description: string; kind: vscode.ChatResponseReferencePartStatusKind }; diffMeta?: { added: number; removed: number } };
 	constructor(value: vscode.Uri | vscode.Location | { variableName: string; value?: vscode.Uri | vscode.Location } | string, iconPath?: vscode.Uri | vscode.ThemeIcon | { light: vscode.Uri; dark: vscode.Uri }, options?: { status?: { description: string; kind: vscode.ChatResponseReferencePartStatusKind } }) {
 		this.value = value;
 		this.iconPath = iconPath;
@@ -4842,10 +4858,22 @@ export enum ChatLocation {
 	Editor = 4,
 }
 
+export enum ChatSessionStatus {
+	Failed = 0,
+	Completed = 1,
+	InProgress = 2
+}
+
 export enum ChatResponseReferencePartStatusKind {
 	Complete = 1,
 	Partial = 2,
 	Omitted = 3
+}
+
+export enum ChatResponseClearToPreviousToolInvocationReason {
+	NoReason = 0,
+	FilteredContentRetry = 1,
+	CopyrightContentRetry = 2,
 }
 
 export class ChatRequestEditorData implements vscode.ChatRequestEditorData {
@@ -4964,9 +4992,9 @@ export class LanguageModelChatMessage2 implements vscode.LanguageModelChatMessag
 
 	role: vscode.LanguageModelChatMessageRole;
 
-	private _content: (LanguageModelTextPart | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart)[] = [];
+	private _content: (LanguageModelTextPart | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart | LanguageModelThinkingPart)[] = [];
 
-	set content(value: string | (LanguageModelTextPart | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart)[]) {
+	set content(value: string | (LanguageModelTextPart | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart | LanguageModelThinkingPart)[]) {
 		if (typeof value === 'string') {
 			// we changed this and still support setting content with a string property. this keep the API runtime stable
 			// despite the breaking change in the type definition.
@@ -4976,7 +5004,7 @@ export class LanguageModelChatMessage2 implements vscode.LanguageModelChatMessag
 		}
 	}
 
-	get content(): (LanguageModelTextPart | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart)[] {
+	get content(): (LanguageModelTextPart | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart | LanguageModelThinkingPart)[] {
 		return this._content;
 	}
 
@@ -4992,7 +5020,7 @@ export class LanguageModelChatMessage2 implements vscode.LanguageModelChatMessag
 		}
 	}
 
-	get content2(): (string | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart)[] | undefined {
+	get content2(): (string | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart | LanguageModelThinkingPart)[] | undefined {
 		return this.content.map(part => {
 			if (part instanceof LanguageModelTextPart) {
 				return part.value;
@@ -5003,7 +5031,7 @@ export class LanguageModelChatMessage2 implements vscode.LanguageModelChatMessag
 
 	name: string | undefined;
 
-	constructor(role: vscode.LanguageModelChatMessageRole, content: string | (LanguageModelTextPart | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart)[], name?: string) {
+	constructor(role: vscode.LanguageModelChatMessageRole, content: string | (LanguageModelTextPart | LanguageModelToolResultPart2 | LanguageModelToolCallPart | LanguageModelDataPart | LanguageModelThinkingPart)[], name?: string) {
 		this.role = role;
 		this.content = content;
 		this.name = name;
@@ -5024,16 +5052,17 @@ export class LanguageModelToolCallPart implements vscode.LanguageModelToolCallPa
 	}
 }
 
-export enum ToolResultAudience {
+export enum LanguageModelPartAudience {
 	Assistant = 0,
 	User = 1,
+	Extension = 2,
 }
 
 export class LanguageModelTextPart implements vscode.LanguageModelTextPart2 {
 	value: string;
-	audience: vscode.ToolResultAudience[] | undefined;
+	audience: vscode.LanguageModelPartAudience[] | undefined;
 
-	constructor(value: string, audience?: vscode.ToolResultAudience[]) {
+	constructor(value: string, audience?: vscode.LanguageModelPartAudience[]) {
 		this.value = value;
 		audience = audience;
 	}
@@ -5050,9 +5079,9 @@ export class LanguageModelTextPart implements vscode.LanguageModelTextPart2 {
 export class LanguageModelDataPart implements vscode.LanguageModelDataPart2 {
 	mimeType: string;
 	data: Uint8Array<ArrayBufferLike>;
-	audience: vscode.ToolResultAudience[] | undefined;
+	audience: vscode.LanguageModelPartAudience[] | undefined;
 
-	constructor(data: Uint8Array<ArrayBufferLike>, mimeType: string, audience?: vscode.ToolResultAudience[]) {
+	constructor(data: Uint8Array<ArrayBufferLike>, mimeType: string, audience?: vscode.LanguageModelPartAudience[]) {
 		this.mimeType = mimeType;
 		this.data = data;
 		this.audience = audience;
@@ -5088,6 +5117,28 @@ export enum ChatImageMimeType {
 	WEBP = 'image/webp',
 	BMP = 'image/bmp',
 }
+
+export class LanguageModelThinkingPart implements vscode.LanguageModelThinkingPart {
+	value: string;
+	id?: string;
+	metadata?: string;
+
+	constructor(value: string, id?: string, metadata?: string) {
+		this.value = value;
+		this.id = id;
+		this.metadata = metadata;
+	}
+
+	toJSON() {
+		return {
+			$mid: MarshalledId.LanguageModelThinkingPart,
+			value: this.value,
+			id: this.id,
+			metadata: this.metadata,
+		};
+	}
+}
+
 
 
 export class LanguageModelPromptTsxPart {

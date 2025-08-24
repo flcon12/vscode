@@ -6,7 +6,7 @@
 import { streamToBuffer } from '../../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { StringSHA1 } from '../../../../../base/common/hash.js';
-import { DisposableStore, IReference } from '../../../../../base/common/lifecycle.js';
+import { DisposableStore, IReference, thenRegisterOrDispose } from '../../../../../base/common/lifecycle.js';
 import { ResourceMap, ResourceSet } from '../../../../../base/common/map.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { ITransaction, IObservable, observableValue, autorun, transaction, ObservablePromise } from '../../../../../base/common/observable.js';
@@ -969,9 +969,16 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 		if (!cell) {
 			throw new Error('Cell not found');
 		}
-		const model = this.cellTextModelMap.get(cell.uri) || this._register(await this.textModelService.createModelReference(cell.uri)).object.textEditorModel;
-		this.cellTextModelMap.set(cell.uri, model);
-		return model;
+		const model = this.cellTextModelMap.get(cell.uri);
+		if (model) {
+			this.cellTextModelMap.set(cell.uri, model);
+			return model;
+		} else {
+			const textEditorModel = await thenRegisterOrDispose(this.textModelService.createModelReference(cell.uri), this._store);
+			const model = textEditorModel.object.textEditorModel;
+			this.cellTextModelMap.set(cell.uri, model);
+			return model;
+		}
 	}
 
 	getOrCreateModifiedTextFileEntryForCell(cell: NotebookCellTextModel, modifiedCellModel: ITextModel, originalCellModel: ITextModel): ChatEditingNotebookCellEntry | undefined {
@@ -979,7 +986,9 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 		if (cellEntry) {
 			return cellEntry;
 		}
-
+		if (this._store.isDisposed) {
+			return;
+		}
 		const disposables = new DisposableStore();
 		cellEntry = this._register(this._instantiationService.createInstance(ChatEditingNotebookCellEntry, this.modifiedResourceRef.object.resource, cell, modifiedCellModel, originalCellModel, disposables));
 		this.cellEntryMap.set(cell.uri, cellEntry);

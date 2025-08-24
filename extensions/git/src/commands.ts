@@ -363,12 +363,12 @@ interface ScmCommand {
 const Commands: ScmCommand[] = [];
 
 function command(commandId: string, options: ScmCommandOptions = {}): Function {
-	return (_target: any, key: string, descriptor: any) => {
-		if (!(typeof descriptor.value === 'function')) {
+	return (value: any, context: ClassMethodDecoratorContext) => {
+		if (context.kind !== 'method') {
 			throw new Error('not supported');
 		}
-
-		Commands.push({ commandId, key, method: descriptor.value, options });
+		const key = context.name.toString();
+		Commands.push({ commandId, key, method: value, options });
 	};
 }
 
@@ -3457,7 +3457,7 @@ export class CommandCenter {
 			return [createBranch, { label: '', kind: QuickPickItemKind.Separator }, ...branchItems];
 		};
 
-		const placeHolder = l10n.t('Select a branch to create the new worktree from');
+		const placeHolder = l10n.t('Select a branch or tag to create the new worktree from');
 		const choice = await this.pickRef(getBranchPicks(), placeHolder);
 
 		if (!choice) {
@@ -3480,15 +3480,32 @@ export class CommandCenter {
 				return;
 			}
 
-			// Check whether the selected branch is checked out in an existing worktree
-			const worktree = repository.worktrees.find(worktree => worktree.ref === choice.refId);
-			if (worktree) {
-				const message = l10n.t('Branch "{0}" is already checked out in the worktree at "{1}".', choice.refName, worktree.path);
-				await this.handleWorktreeConflict(worktree.path, message);
-				return;
-			}
+			if (choice.refName === repository.HEAD?.name) {
+				const message = l10n.t('Branch "{0}" is already checked out in the current repository.', choice.refName);
+				const createBranch = l10n.t('Create New Branch');
+				const pick = await window.showWarningMessage(message, { modal: true }, createBranch);
 
-			commitish = choice.refName;
+				if (pick === createBranch) {
+					branch = await this.promptForBranchName(repository);
+
+					if (!branch) {
+						return;
+					}
+
+					commitish = 'HEAD';
+				} else {
+					return;
+				}
+			} else {
+				// Check whether the selected branch is checked out in an existing worktree
+				const worktree = repository.worktrees.find(worktree => worktree.ref === choice.refId);
+				if (worktree) {
+					const message = l10n.t('Branch "{0}" is already checked out in the worktree at "{1}".', choice.refName, worktree.path);
+					await this.handleWorktreeConflict(worktree.path, message);
+					return;
+				}
+				commitish = choice.refName;
+			}
 		}
 
 		const worktreeName = ((branch ?? commitish).startsWith(branchPrefix)
@@ -4762,11 +4779,12 @@ export class CommandCenter {
 
 		const title = `${item.shortRef} - ${truncate(commit.message)}`;
 		const multiDiffSourceUri = Uri.from({ scheme: 'scm-history-item', path: `${repository.root}/${commitParentId}..${commit.hash}` });
+		const reveal = { modifiedUri: toGitUri(uri, commit.hash) };
 
 		return {
 			command: '_workbench.openMultiDiffEditor',
 			title: l10n.t('Open Commit'),
-			arguments: [{ multiDiffSourceUri, title, resources }, options]
+			arguments: [{ multiDiffSourceUri, title, resources, reveal }, options]
 		};
 	}
 
@@ -5015,7 +5033,7 @@ export class CommandCenter {
 	}
 
 	@command('git.viewCommit', { repository: true })
-	async viewCommit(repository: Repository, historyItemId: string): Promise<void> {
+	async viewCommit(repository: Repository, historyItemId: string, revealUri?: Uri): Promise<void> {
 		if (!repository || !historyItemId) {
 			return;
 		}
@@ -5032,8 +5050,9 @@ export class CommandCenter {
 
 		const changes = await repository.diffTrees(historyItemParentId, historyItemId);
 		const resources = changes.map(c => toMultiFileDiffEditorUris(c, historyItemParentId, historyItemId));
+		const reveal = revealUri ? { modifiedUri: toGitUri(revealUri, historyItemId) } : undefined;
 
-		await commands.executeCommand('_workbench.openMultiDiffEditor', { multiDiffSourceUri, title, resources });
+		await commands.executeCommand('_workbench.openMultiDiffEditor', { multiDiffSourceUri, title, resources, reveal });
 	}
 
 	@command('git.copyContentToClipboard')

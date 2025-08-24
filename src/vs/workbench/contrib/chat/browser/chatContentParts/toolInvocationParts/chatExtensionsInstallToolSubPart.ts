@@ -12,11 +12,11 @@ import { areSameExtensions } from '../../../../../../platform/extensionManagemen
 import { IInstantiationService } from '../../../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../../../platform/keybinding/common/keybinding.js';
 import { ChatContextKeys } from '../../../common/chatContextKeys.js';
-import { IChatToolInvocation } from '../../../common/chatService.js';
+import { ConfirmedReason, IChatToolInvocation, ToolConfirmKind } from '../../../common/chatService.js';
 import { CancelChatActionId } from '../../actions/chatExecuteActions.js';
 import { AcceptToolConfirmationActionId } from '../../actions/chatToolActions.js';
 import { IChatCodeBlockInfo, IChatWidgetService } from '../../chat.js';
-import { ChatConfirmationWidget, IChatConfirmationButton } from '../chatConfirmationWidget.js';
+import { IChatConfirmationButton, ChatConfirmationWidget } from '../chatConfirmationWidget.js';
 import { IChatContentPartRenderContext } from '../chatContentParts.js';
 import { ChatExtensionsContentPart } from '../chatExtensionsContentPart.js';
 import { BaseChatToolInvocationSubPart } from './chatToolInvocationSubPart.js';
@@ -56,29 +56,30 @@ export class ExtensionsInstallConfirmationWidgetSubPart extends BaseChatToolInvo
 			const cancelTooltip = cancelKeybinding ? `${cancelLabel} (${cancelKeybinding})` : cancelLabel;
 			const enableContinueButtonEvent = this._register(new Emitter<boolean>());
 
-			const buttons: IChatConfirmationButton[] = [
+			const buttons: IChatConfirmationButton<ConfirmedReason>[] = [
 				{
 					label: continueLabel,
-					data: true,
+					data: { type: ToolConfirmKind.UserAction },
 					tooltip: continueTooltip,
 					disabled: true,
 					onDidChangeDisablement: enableContinueButtonEvent.event
 				},
 				{
 					label: cancelLabel,
-					data: false,
+					data: { type: ToolConfirmKind.Denied },
 					isSecondary: true,
 					tooltip: cancelTooltip
 				}
 			];
 
 			const confirmWidget = this._register(instantiationService.createInstance(
-				ChatConfirmationWidget,
-				toolInvocation.confirmationMessages?.title ?? localize('installExtensions', "Install Extensions"),
-				undefined,
-				toolInvocation.confirmationMessages?.message ?? localize('installExtensionsConfirmation', "Click the Install button on the extension and then press Continue when finished."),
-				buttons,
+				ChatConfirmationWidget<ConfirmedReason>,
 				context.container,
+				{
+					title: toolInvocation.confirmationMessages?.title ?? localize('installExtensions', "Install Extensions"),
+					message: toolInvocation.confirmationMessages?.message ?? localize('installExtensionsConfirmation', "Click the Install button on the extension and then press Continue when finished."),
+					buttons,
+				}
 			));
 			this._register(confirmWidget.onDidChangeHeight(() => this._onDidChangeHeight.fire()));
 			dom.append(this.domNode, confirmWidget.domNode);
